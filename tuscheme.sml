@@ -1385,19 +1385,24 @@ fun tysubst (tau, varenv) =
   (* definition of [[renameForallAvoiding]] for {\tuscheme} ((prototype)) 465 *)
       fun renameForallAvoiding (alphas, tau, captured) =
           let   
-            fun renameHelper (alphas: name list): name list = 
+            fun renameHelper (alphas: name list)(avoid): name list = 
               (case alphas of 
                 a::alphas =>
                   if member a captured 
                   then
-                    let val avoid = union(alphas, captured)
-                    in (freshName (a, avoid))::(renameHelper alphas)
+                    let 
+                      val new_name = freshName (a, avoid)
+                      val new_avoid = union (new_name::[], avoid)
+                    in new_name::(renameHelper alphas new_avoid)
                     end
-                  else a::(renameHelper alphas)
-              | [] => []) 
-            val new_alphas = renameHelper alphas
-            val new_varenv = bindList (new_alphas, map TYVAR new_alphas, varenv)
-          in FORALL (new_alphas, tysubst(tau, new_varenv))
+                  else a::(renameHelper alphas avoid)
+              | [] => [])
+
+            val free = freetyvars tau
+            val avoid = union (free, union (alphas, captured)) 
+            val new_alphas = renameHelper alphas avoid
+
+          in FORALL (new_alphas, tau)
           end
       (* type declarations for consistency checking *)
       val _ = op renameForallAvoiding : name list * tyex * name set -> tyex
