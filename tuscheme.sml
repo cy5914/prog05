@@ -1389,7 +1389,10 @@ fun tysubst (tau, varenv) =
               (case alphas of 
                 a::alphas =>
                   if member a captured 
-                  then (freshName (a, captured))::(renameHelper alphas)
+                  then
+                    let val avoid = union(alphas, captured)
+                    in (freshName (a, avoid))::(renameHelper alphas)
+                    end
                   else a::(renameHelper alphas)
               | [] => []) 
             val new_alphas = renameHelper alphas
