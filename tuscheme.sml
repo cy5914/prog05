@@ -1502,19 +1502,58 @@ val _ = op eqTypes : tyex list * tyex list -> bool
 
 (* type checking for {\tuscheme} ((prototype)) 436 *)
 fun typeof (e : exp, Delta : kind env, Gamma : tyex env) : tyex =
-  let fun ty (LITERAL (NUM n)) = raise LeftAsExercise "LITERAL/NUM"
-        | ty (LITERAL (BOOLV b)) = raise LeftAsExercise "LITERAL/BOOL"
-        | ty (LITERAL (SYM s)) = raise LeftAsExercise "LITERAL/SYM"
-        | ty (LITERAL NIL) = raise LeftAsExercise "LITERAL/NIL"
-        | ty (LITERAL (PAIR (h, t))) = raise LeftAsExercise "LITERAL/PAIR"
+  let fun ty (LITERAL (NUM n)) = inttype
+        | ty (LITERAL (BOOLV b)) = booltype
+        | ty (LITERAL (SYM s)) = symtype
+        | ty (LITERAL NIL) = tyvarA
+        | ty (LITERAL (PAIR (h, t))) = 
+            if (eqType(LITERAL h, LITERAL t))
+            then ty(LITERAL h)
+            else raise TypeError( "Pair of values of different type" )
         | ty (LITERAL (CLOSURE _)) = raise TypeError "impossible -- CLOSURE literal"
         | ty (LITERAL (PRIMITIVE _)) = raise TypeError "impossible -- PRIMITIVE literal"
-        | ty (VAR x) = raise LeftAsExercise "VAR"
-        | ty (SET (x, e)) = raise LeftAsExercise "SET"
-        | ty (IFX (e1, e2, e3)) = raise LeftAsExercise "IFX"
+        | ty (VAR x) = find (x, Gamma)
+        | ty (SET (x, e)) =
+            let val t1 = find (x, Gamma)
+                val t2 = ty e
+            in  if eqType (t1, t2) then t1
+                else raise TypeError( "Expected " ^ typeString t1 ^ " but
+                                      got " ^ typeString t2 ^ " instead")
+            end
+        | ty (IFX (e1, e2, e3)) = 
+            let val t1 = ty e1
+                val t2 = ty e2
+                val t3 = ty e3
+            in  if eqType (t1, booltype)
+                then
+                    if eqType (t2, t3)
+                    then t2
+                    else raise TypeError("Then exp has type "
+                                         ^ typeString t2 ^
+                                         " but else exp has type "
+                                         ^ typeString t3)
+                else raise TypeError("Condition has type "
+                                     ^ typeString t1 ^
+                                     " instead of bool")
+            end
+
         | ty (WHILEX (e1, e2)) = raise LeftAsExercise "WHILE"
-        | ty (BEGIN es) = raise LeftAsExercise "BEGIN"
-        | ty (LETX (LET, bs, body)) = raise LeftAsExercise "LETX/LET"
+        | ty (BEGIN es) = 
+            let val types = map ty es
+                fun getLastType t =
+                  case t of
+                    x::y => (case y of 
+                               [] => x
+                             | _ => getLastType y)
+                  | [] => tyvarA
+            in getLastType types
+            end
+                  
+        | ty (LETX (LET, bs, body)) = 
+            let val types = map ty (map snd bs)
+                val vars = map fst bs
+            in typeof (body, bindList (vars, types, Gamma), Delta)
+            end
         | ty (LETX (LETSTAR, bs, body)) = raise LeftAsExercise "LETX/LETSTAR"
         | ty (LETRECX (bs, body)) = raise LeftAsExercise "LETRECX"
         | ty (LAMBDA (formals, body)) = raise LeftAsExercise "LAMBDA"
@@ -1528,7 +1567,10 @@ val _ = op typeof  : exp * kind env * tyex env -> tyex
 (* type checking for {\tuscheme} ((prototype)) 436 *)
 fun elabdef (d : def, Delta : kind env, Gamma : tyex env) : tyex env * string =
   case d
-    of VAL (name, e) => raise LeftAsExercise "VAL"
+    of VAL (name, e) => 
+        let val tau = typeof (exp, Gamma, Delta)
+        in (bind (name, tau, Gamma), typeString tau)
+        end
      | EXP e => elabdef (VAL ("it", e), Delta, Gamma)
      | DEFINE (name, tau, lambda as (formals, body)) => raise LeftAsExercise "DEFINE"
      | VALREC (name, tau, e) => raise LeftAsExercise "VALREC"
