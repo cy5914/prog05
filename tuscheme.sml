@@ -1573,16 +1573,24 @@ fun typeof (e : exp, Delta : kind env, Gamma : tyex env) : tyex =
                 Gamma)
             in typeof (body, Delta, foldl helper Gamma bs)
             end
-        | ty (LETRECX (bs, body)) = raise LeftAsExercise "LETRECX"
+        | ty (LETRECX (bs, body)) =
+            let val ts = map ty (map snd bs)
+                val types = map (fn t => asType (t, Delta)) ts
+                val vars = map fst (map fst bs)
+                
+            in typeof (body, Delta, bindList (vars, types, Gamma))
+            end
         | ty (LAMBDA (formals, body)) = 
-            let val types = map snd formals
+            let val ts = map snd formals
+                val types = map (fn t => asType (t, Delta)) ts
                 val vars = map fst formals
                 fun kind tau = kindof( tau, Delta )
                 val kinds = map kind types
                 val returnType = typeof (body, Delta, bindList(vars, types, Gamma))
-                fun checkType t =
+                (*fun checkType t =
+                    
                     (case t
-                       of TYCON "list" => false 
+                       of TYCON "list" => raise TypeError "List is not a type" 
                     | TYCON _ => true
                     | CONAPP _ => true
                     | FUNTY _ => true
@@ -1593,9 +1601,10 @@ fun typeof (e : exp, Delta : kind env, Gamma : tyex env) : tyex =
                     (case types
                        of [] => true
                      | x::xs => if checkType x then checkAllTypes xs else false)
+                     *)
                                   
-            in if checkAllTypes types then FUNTY(types, returnType) 
-               else raise TypeError "Type not found"
+            in (*if checkAllTypes types then*) FUNTY(types, returnType) 
+               (*else raise TypeError "Type not found"*)
             end
         | ty (APPLY (f, actuals)) =
             let val actype = map ty actuals
@@ -1611,6 +1620,11 @@ fun typeof (e : exp, Delta : kind env, Gamma : tyex env) : tyex =
             end
         | ty (TYLAMBDA (alphas, e)) =
             let val types = map (fn _ => TYPE) alphas
+                (*val oldTau = typeof( e, Delta, Gamma )
+                val freeVars = freetyvars oldTau
+                val checkFree = 
+                  map (fn a => if member a freeVars
+                               then raise TypeError "free" else true)*)
                 val delta' = bindList(alphas, types, Delta)
                 val tau = typeof( e, delta', Gamma )
             in FORALL (alphas, tau)
@@ -1642,9 +1656,13 @@ fun elabdef (d : def, Delta : kind env, Gamma : tyex env) : tyex env * string =
      | VALREC (name, tau, e) =>
          (case e
            of LAMBDA (formals, body) =>
-             if eqType(tau, typeof(e, Delta, bind(name, tau, Gamma)))
-             then (bind (name, tau, Gamma), typeString tau)
-             else raise TypeError "Mismatched types"
+             let val ts = map snd formals
+                 val types = map (fn t => asType (t, Delta)) ts
+             in
+               if eqType(tau, typeof(e, Delta, bind(name, tau, Gamma)))
+               then (bind (name, tau, Gamma), typeString tau)
+               else raise TypeError "Mismatched types"
+             end
          | _ => raise TypeError "e not in form of LAMBDA(...)")
 val _ = op elabdef : def * kind env * tyex env -> tyex env * string
 
