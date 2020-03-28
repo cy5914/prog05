@@ -40,7 +40,7 @@ val emptyEnv = []
 
 (* lookup and check of existing bindings *)
 exception NotFound of name
-fun find (name, []) = raise TypeError name
+fun find (name, []) = raise NotFound name
   | find (name, (n, v)::tail) = if name = n then v else find (name, tail)
 
 (* adding new bindings *)
@@ -1516,9 +1516,15 @@ fun typeof (e : exp, Delta : kind env, Gamma : tyex env) : tyex =
             end
         | ty (LITERAL (CLOSURE _)) = raise TypeError "impossible -- CLOSURE literal"
         | ty (LITERAL (PRIMITIVE _)) = raise TypeError "impossible -- PRIMITIVE literal"
-        | ty (VAR x) = find (x, Gamma)
+        | ty (VAR x) =
+            let
+            in find (x, Gamma)
+            handle NotFound _ => raise TypeError ("unknown type variable " ^ x)
+            end
         | ty (SET (x, e)) =
             let val t1 = find (x, Gamma)
+                handle NotFound _ => raise TypeError ("unknown type variable " ^ x)
+
                 val t2 = ty e
             in  if eqType (t1, t2) then t1
                 else raise TypeError( "Expected " ^ typeString t1 ^ " but got " ^ typeString t2 ^ " instead")
@@ -1547,15 +1553,15 @@ fun typeof (e : exp, Delta : kind env, Gamma : tyex env) : tyex =
             "Expected bool as e1"
             end
         | ty (BEGIN es) = 
-            let val types = map ty es
-                fun getLastType t =
-                  case t of
-                    x::y => (case y of 
-                               [] => x
-                             | _ => getLastType y)
-                  | [] => unittype
-            in getLastType types
-            end
+            let fun checkEs es =
+                (case es of
+                   e::es => (case ty e of _ => checkEs es)
+                 | _ => true)
+                val checked = checkEs es
+                fun b (e::es, lastval) = b (es, ty e)
+		           | b (   [], lastval) = lastval
+	        in b (es, unittype)
+	        end
                   
         | ty (LETX (LET, bs, body)) = 
             let val types = map ty (map snd bs)
@@ -1591,14 +1597,25 @@ fun typeof (e : exp, Delta : kind env, Gamma : tyex env) : tyex =
             in if checkAllTypes types then FUNTY(types, returnType) 
                else raise TypeError "Type not found"
             end
-        | ty (APPLY (f, actuals)) = raise LeftAsExercise "APPLY"
-        | ty (TYLAMBDA (alphas, e)) = 
+        | ty (APPLY (f, actuals)) =
+            let val actype = map ty actuals
+              fun getStuff f =
+                (case f of
+                    FUNTY (formalT,  resultT) => (formalT, resultT)
+                  | t => raise TypeError ("Not a function in APPLY" ^ typeString
+                  t))
+              val (formalT, resultT) = getStuff (ty f)
+            in
+              if eqTypes (actype, formalT) then resultT
+                else raise TypeError "Invalid type on APPLY call"
+            end
+        | ty (TYLAMBDA (alphas, e)) =
             let val types = map (fn _ => TYPE) alphas
                 val delta' = bindList(alphas, types, Delta)
                 val tau = typeof( e, delta', Gamma )
             in FORALL (alphas, tau)
             end
-        | ty (TYAPPLY (e, args)) = raise LeftAsExercise "TYAPPLY"
+        | ty (TYAPPLY (e, args)) = instantiate( ty(e), args, Delta)
   in  ty e
   end
 (* type declarations for consistency checking *)
@@ -1611,11 +1628,21 @@ fun elabdef (d : def, Delta : kind env, Gamma : tyex env) : tyex env * string =
         in (bind (name, tau, Gamma), typeString tau)
         end
      | EXP e => elabdef (VAL ("it", e), Delta, Gamma)
-     | DEFINE (name, tau, lambda as (formals, body)) => raise LeftAsExercise "DEFINE"
+     | DEFINE (name, tau, lambda as (formals, body)) =>
+        let  val t = typeof(LAMBDA (formals, body), Delta, bind (name, FUNTY
+        (map snd formals, tau), Gamma))
+             val d = (case t of
+                         FUNTY (a, b) => b
+                       | _ => raise TypeError "Mismatched types ")
+         in
+             if eqType(tau, d)
+             then (bind (name, t, Gamma), typeString t)
+             else raise TypeError "Mismatched types"
+         end
      | VALREC (name, tau, e) =>
          (case e
            of LAMBDA (formals, body) =>
-             if eqType(tau, typeof(e, Delta, Gamma))
+             if eqType(tau, typeof(e, Delta, bind(name, tau, Gamma)))
              then (bind (name, tau, Gamma), typeString tau)
              else raise TypeError "Mismatched types"
          | _ => raise TypeError "e not in form of LAMBDA(...)")
