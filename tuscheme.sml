@@ -40,7 +40,7 @@ val emptyEnv = []
 
 (* lookup and check of existing bindings *)
 exception NotFound of name
-fun find (name, []) = raise NotFound name
+fun find (name, []) = raise TypeError name
   | find (name, (n, v)::tail) = if name = n then v else find (name, tail)
 
 (* adding new bindings *)
@@ -1505,11 +1505,15 @@ fun typeof (e : exp, Delta : kind env, Gamma : tyex env) : tyex =
   let fun ty (LITERAL (NUM n)) = inttype
         | ty (LITERAL (BOOLV b)) = booltype
         | ty (LITERAL (SYM s)) = symtype
-        | ty (LITERAL NIL) = tyvarA
+        | ty (LITERAL NIL) = FORALL (["'a"], listtype (TYVAR ("'a")))
         | ty (LITERAL (PAIR (h, t))) = 
-            if (eqType(LITERAL h, LITERAL t))
-            then ty(LITERAL h)
-            else raise TypeError( "Pair of values of different type" )
+            let val t1 = ty (LITERAL h)
+                val t2 = ty (LITERAL t)
+            in  if eqType (listtype t1, t2) 
+                then t2
+                else (if eqType(ty (LITERAL t), ty (LITERAL NIL)) then listtype t1
+                      else raise TypeError "Pair of different types")
+            end
         | ty (LITERAL (CLOSURE _)) = raise TypeError "impossible -- CLOSURE literal"
         | ty (LITERAL (PRIMITIVE _)) = raise TypeError "impossible -- PRIMITIVE literal"
         | ty (VAR x) = find (x, Gamma)
@@ -1517,8 +1521,7 @@ fun typeof (e : exp, Delta : kind env, Gamma : tyex env) : tyex =
             let val t1 = find (x, Gamma)
                 val t2 = ty e
             in  if eqType (t1, t2) then t1
-                else raise TypeError( "Expected " ^ typeString t1 ^ " but
-                                      got " ^ typeString t2 ^ " instead")
+                else raise TypeError( "Expected " ^ typeString t1 ^ " but got " ^ typeString t2 ^ " instead")
             end
         | ty (IFX (e1, e2, e3)) = 
             let val t1 = ty e1
@@ -1537,7 +1540,12 @@ fun typeof (e : exp, Delta : kind env, Gamma : tyex env) : tyex =
                                      " instead of bool")
             end
 
-        | ty (WHILEX (e1, e2)) = raise LeftAsExercise "WHILE"
+        | ty (WHILEX (e1, e2)) =
+            let val t1 = ty e1
+                val t2 = ty e2
+            in if eqType(t1, booltype) then unittype else raise TypeError
+            "Expected bool as e1"
+            end
         | ty (BEGIN es) = 
             let val types = map ty es
                 fun getLastType t =
@@ -1545,20 +1553,51 @@ fun typeof (e : exp, Delta : kind env, Gamma : tyex env) : tyex =
                     x::y => (case y of 
                                [] => x
                              | _ => getLastType y)
-                  | [] => tyvarA
+                  | [] => unittype
             in getLastType types
             end
                   
         | ty (LETX (LET, bs, body)) = 
             let val types = map ty (map snd bs)
                 val vars = map fst bs
-            in typeof (body, bindList (vars, types, Gamma), Delta)
+            in typeof (body, Delta, bindList (vars, types, Gamma))
+            end    
+        | ty (LETX (LETSTAR, bs, body)) = 
+            let fun helper ((v, e), Gamma) = bind (v, typeof( e, Delta, Gamma),
+                Gamma)
+            in typeof (body, Delta, foldl helper Gamma bs)
             end
-        | ty (LETX (LETSTAR, bs, body)) = raise LeftAsExercise "LETX/LETSTAR"
         | ty (LETRECX (bs, body)) = raise LeftAsExercise "LETRECX"
-        | ty (LAMBDA (formals, body)) = raise LeftAsExercise "LAMBDA"
+        | ty (LAMBDA (formals, body)) = 
+            let val types = map snd formals
+                val vars = map fst formals
+                fun kind tau = kindof( tau, Delta )
+                val kinds = map kind types
+                val returnType = typeof (body, Delta, bindList(vars, types, Gamma))
+                fun checkType t =
+                    (case t
+                       of TYCON "list" => false 
+                    | TYCON _ => true
+                    | CONAPP _ => true
+                    | FUNTY _ => true
+                    | FORALL _ => true
+                    | TYVAR _ => true
+                    | _ => false)
+                fun checkAllTypes types =
+                    (case types
+                       of [] => true
+                     | x::xs => if checkType x then checkAllTypes xs else false)
+                                  
+            in if checkAllTypes types then FUNTY(types, returnType) 
+               else raise TypeError "Type not found"
+            end
         | ty (APPLY (f, actuals)) = raise LeftAsExercise "APPLY"
-        | ty (TYLAMBDA (alphas, e)) = raise LeftAsExercise "TYLAMBDA"
+        | ty (TYLAMBDA (alphas, e)) = 
+            let val types = map (fn _ => TYPE) alphas
+                val delta' = bindList(alphas, types, Delta)
+                val tau = typeof( e, delta', Gamma )
+            in FORALL (alphas, tau)
+            end
         | ty (TYAPPLY (e, args)) = raise LeftAsExercise "TYAPPLY"
   in  ty e
   end
@@ -1568,12 +1607,18 @@ val _ = op typeof  : exp * kind env * tyex env -> tyex
 fun elabdef (d : def, Delta : kind env, Gamma : tyex env) : tyex env * string =
   case d
     of VAL (name, e) => 
-        let val tau = typeof (exp, Gamma, Delta)
+        let val tau = typeof (e, Delta, Gamma)
         in (bind (name, tau, Gamma), typeString tau)
         end
      | EXP e => elabdef (VAL ("it", e), Delta, Gamma)
      | DEFINE (name, tau, lambda as (formals, body)) => raise LeftAsExercise "DEFINE"
-     | VALREC (name, tau, e) => raise LeftAsExercise "VALREC"
+     | VALREC (name, tau, e) =>
+         (case e
+           of LAMBDA (formals, body) =>
+             if eqType(tau, typeof(e, Delta, Gamma))
+             then (bind (name, tau, Gamma), typeString tau)
+             else raise TypeError "Mismatched types"
+         | _ => raise TypeError "e not in form of LAMBDA(...)")
 val _ = op elabdef : def * kind env * tyex env -> tyex env * string
 
 
